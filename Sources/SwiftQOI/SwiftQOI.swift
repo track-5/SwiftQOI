@@ -42,9 +42,9 @@ public class Image {
     public let height: Int
     public let channels: Int
     public let colorspace: Colorspace
-    public var pixels : [UInt8]
+    public let pixels : [UInt8]
     
-    init(width: Int, height: Int, channels: Int, colorspace: UInt8) {
+    init(width: Int, height: Int, channels: Int, colorspace: UInt8, pixels: [UInt8]) {
         self.width = width
         self.height = height
         self.channels = channels
@@ -58,9 +58,101 @@ public class Image {
             self.colorspace = .other(colorspace)
         }
         
-        self.pixels = [UInt8](repeating: 255, count: channels * width * height)
+        self.pixels = pixels
     }
-
+    
+    public static func decode(_ data: Data) throws -> Image {
+        return try data.withUnsafeBytes { rawBufferPointer in
+            let length = rawBufferPointer.count
+            
+            if length < (HEADER_SIZE + END_MARKER_SIZE) {
+                throw DecodeError.notEnoughData
+            }
+            
+            var rawPointer = UnsafeMutableRawPointer(mutating: rawBufferPointer.baseAddress!)
+            
+            let magic = rawPointer.readUInt32().byteSwapped
+            if magic != MAGIC_NUMBER {
+                throw DecodeError.badMagicNumber
+            }
+            
+            let width = Int(rawPointer.readUInt32().byteSwapped)
+            let height = Int(rawPointer.readUInt32().byteSwapped)
+            let channels = Int(rawPointer.readUInt8())
+            let colorspace = rawPointer.readUInt8()
+            
+            var index = [Pixel](repeating: Pixel(r: 0, g: 0, b: 0, a: 0), count: 64)
+            let pixelsLen = channels * width * height
+            
+            var previousPixel = Pixel(r: 0, g: 0, b: 0, a: 255)
+            var pixelPos = 0
+            var runLength = 0
+            
+            var pixels = [UInt8](repeating: 255, count: channels * width * height)
+            
+            
+            while pixelPos < pixelsLen {
+                if (runLength > 0) {
+                    runLength -= 1
+                } else {
+                    // Read the tag
+                    let tag = rawPointer.readUInt8()
+                    
+                    if tag == QOI_TAG_RGB { // RGB color
+                        previousPixel.r = rawPointer.readUInt8()
+                        previousPixel.g = rawPointer.readUInt8()
+                        previousPixel.b = rawPointer.readUInt8()
+                    } else if tag == QOI_TAG_RGBA { // RGBA color
+                        previousPixel.r = rawPointer.readUInt8()
+                        previousPixel.g = rawPointer.readUInt8()
+                        previousPixel.b = rawPointer.readUInt8()
+                        previousPixel.a = rawPointer.readUInt8()
+                    } else {
+                        // Reference to handle overflow
+                        // https://developer.apple.com/documentation/swift/swift_standard_library/operator_declarations
+                        switch (tag & QOI_TAG_2BIT_MASK) {
+                        case QOI_TAG_INDEX: // Op index
+                            previousPixel = index[Int(tag)]
+                        case QOI_TAG_DIFF: // Diff
+                            previousPixel.r &+= ((tag >> 4) & 0x3) &- 2
+                            previousPixel.g &+= ((tag >> 2) & 0x3) &- 2
+                            previousPixel.b &+= (tag        & 0x3) &- 2
+                        case QOI_TAG_LUMA: // Luma
+                            let nextByte = rawPointer.readUInt8()
+                            let dg = (tag & 0x3f) &- 32
+                            
+                            previousPixel.r &+= (dg &- 8) &+ ((nextByte >> 4) & 0x0f)
+                            previousPixel.g &+= dg
+                            previousPixel.b &+= (dg &- 8) &+ (nextByte & 0x0f)
+                        case QOI_TAG_RUN: // Run
+                            runLength = Int(tag & 0x3f)
+                        default:
+                            fatalError("Unreachable")
+                        }
+                    }
+                    index[previousPixel.hash()] = previousPixel
+                }
+                
+                pixels[pixelPos]     = previousPixel.r
+                pixels[pixelPos + 1] = previousPixel.g
+                pixels[pixelPos + 2] = previousPixel.b
+                
+                if channels == 4 {
+                    pixels[pixelPos + 3] = previousPixel.a
+                }
+                
+                pixelPos += channels
+            }
+            
+            return Image(
+                width: width,
+                height: height,
+                channels: channels,
+                colorspace: colorspace,
+                pixels: pixels
+            )
+        }
+    }
 }
 
 public enum DecodeError : Error {
@@ -70,95 +162,6 @@ public enum DecodeError : Error {
 }
 
 public extension Image {
-    static func decode(_ data: Data) throws -> Image {
-        try data.withUnsafeBytes { rawBufferPointer in
-            try decode(rawBufferPointer)
-        }
-    }
-    
-    static func decode(_ rawBufferPointer: UnsafeRawBufferPointer) throws -> Image {
-        let length = rawBufferPointer.count
-        
-        if length < (HEADER_SIZE + END_MARKER_SIZE) {
-            throw DecodeError.notEnoughData
-        }
-
-        var rawPointer = UnsafeMutableRawPointer(mutating: rawBufferPointer.baseAddress!)
-    
-        let magic = rawPointer.readUInt32().byteSwapped
-        if magic != MAGIC_NUMBER {
-            throw DecodeError.badMagicNumber
-        }
-        
-        let image = Image(
-            width: Int(rawPointer.readUInt32().byteSwapped),
-            height: Int(rawPointer.readUInt32().byteSwapped),
-            channels: Int(rawPointer.readUInt8()),
-            colorspace: rawPointer.readUInt8()
-        )
-    
-        var index = [Pixel](repeating: Pixel(r: 0, g: 0, b: 0, a: 0), count: 64)
-        let pixelsLen = image.pixels.count
-        
-        var previousPixel = Pixel(r: 0, g: 0, b: 0, a: 255)
-        var pixelPos = 0
-        var runLength = 0
-
-        while pixelPos < pixelsLen {
-            if (runLength > 0) {
-                runLength -= 1
-            } else {
-                // Read the tag
-                let tag = rawPointer.readUInt8()
-                
-                if tag == QOI_TAG_RGB { // RGB color
-                    previousPixel.r = rawPointer.readUInt8()
-                    previousPixel.g = rawPointer.readUInt8()
-                    previousPixel.b = rawPointer.readUInt8()
-                } else if tag == QOI_TAG_RGBA { // RGBA color
-                    previousPixel.r = rawPointer.readUInt8()
-                    previousPixel.g = rawPointer.readUInt8()
-                    previousPixel.b = rawPointer.readUInt8()
-                    previousPixel.a = rawPointer.readUInt8()
-                } else {
-                    // Reference to handle overflow
-                    // https://developer.apple.com/documentation/swift/swift_standard_library/operator_declarations
-                    switch (tag & QOI_TAG_2BIT_MASK) {
-                    case QOI_TAG_INDEX: // Op index
-                        previousPixel = index[Int(tag)]
-                    case QOI_TAG_DIFF: // Diff
-                        previousPixel.r &+= ((tag >> 4) & 0x3) &- 2
-                        previousPixel.g &+= ((tag >> 2) & 0x3) &- 2
-                        previousPixel.b &+= (tag        & 0x3) &- 2
-                    case QOI_TAG_LUMA: // Luma
-                        let nextByte = rawPointer.readUInt8()
-                        let dg = (tag & 0x3f) &- 32
-                        
-                        previousPixel.r &+= (dg &- 8) &+ ((nextByte >> 4) & 0x0f)
-                        previousPixel.g &+= dg
-                        previousPixel.b &+= (dg &- 8) &+ (nextByte & 0x0f)
-                    case QOI_TAG_RUN: // Run
-                        runLength = Int(tag & 0x3f)
-                    default:
-                        fatalError("Unreachable")
-                    }
-                }
-                index[previousPixel.hash()] = previousPixel
-            }
-            
-            image.pixels[pixelPos]     = previousPixel.r
-            image.pixels[pixelPos + 1] = previousPixel.g
-            image.pixels[pixelPos + 2] = previousPixel.b
-            
-            if image.channels == 4 {
-                image.pixels[pixelPos + 3] = previousPixel.a
-            }
-            
-            pixelPos += image.channels
-        }
-        return image
-    }
-    
     func encode() -> Data {
         let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: HEADER_SIZE + END_MARKER_SIZE + width * height * channels)
         let baseAddress = buffer.baseAddress!
