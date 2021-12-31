@@ -60,7 +60,15 @@ public class Image {
         
         self.pixels = pixels
     }
-    
+}
+
+public enum DecodeError : Error {
+    case notEnoughData
+    case badEndMarker
+    case badMagicNumber
+}
+
+public extension Image {
     public static func decode(_ data: Data) throws -> Image {
         return try data.withUnsafeBytes { rawBufferPointer in
             let length = rawBufferPointer.count
@@ -153,15 +161,7 @@ public class Image {
             )
         }
     }
-}
-
-public enum DecodeError : Error {
-    case notEnoughData
-    case badEndMarker
-    case badMagicNumber
-}
-
-public extension Image {
+    
     func encode() -> Data {
         let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: HEADER_SIZE + END_MARKER_SIZE + width * height * channels)
         let baseAddress = buffer.baseAddress!
