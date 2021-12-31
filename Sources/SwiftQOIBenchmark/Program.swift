@@ -113,19 +113,19 @@ struct SwiftQOIBenchmark : ParsableCommand {
             measurements.qoiDecodeTime.append(elapsed)
         }
         
-        var qoiEncodedData: Data = image.encode()
-        
-        for _ in 0..<iterations {
-            let start = DispatchTime.now()
-            qoiEncodedData = image.encode()
-            let end = DispatchTime.now()
-            let elapsed = Double((end.uptimeNanoseconds - start.uptimeNanoseconds)) / 1_000_000.0
-            measurements.qoiEncodeTime.append(elapsed)
-        }
+//        var qoiEncodedData: Data = image.encode()
+//
+//        for _ in 0..<iterations {
+//            let start = DispatchTime.now()
+//            qoiEncodedData = image.encode()
+//            let end = DispatchTime.now()
+//            let elapsed = Double((end.uptimeNanoseconds - start.uptimeNanoseconds)) / 1_000_000.0
+//            measurements.qoiEncodeTime.append(elapsed)
+//        }
         
         measurements.width = image.width
         measurements.height = image.height
-        measurements.qoiSize = qoiEncodedData.count
+//        measurements.qoiSize = qoiEncodedData.count
         measurements.rawSize = image.pixels.count
         results.append(measurements)
     }
